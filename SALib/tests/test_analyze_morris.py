@@ -6,12 +6,13 @@ from numpy.testing import assert_allclose, assert_equal
 
 import numpy as np
 
-from ..analyze.morris import analyze, \
+from SALib.analyze.morris import analyze, \
     compute_mu_star_confidence, \
     compute_elementary_effects, \
     get_increased_values, \
     get_decreased_values, \
-    compute_grouped_mu_star
+    compute_grouped_metric, \
+    compute_grouped_sigma
 
 
 def test_compute_mu_star_confidence():
@@ -32,6 +33,8 @@ def test_compute_mu_star_confidence():
 def test_analysis_of_morris_results():
     '''
     Tests a one-dimensional vector of results
+    
+    Taken from the solution to Exercise 4 (p.138) in Saltelli (2008).
     '''
     model_input = np.array([[0, 1. / 3], [0, 1], [2. / 3, 1],
                              [0, 1. / 3], [2. / 3, 1. / 3], [2. / 3, 1],
@@ -41,7 +44,9 @@ def test_analysis_of_morris_results():
                              [1. / 3, 2. / 3], [1. / 3, 0], [1, 0]],
                             dtype=np.float)
 
-    model_output = np.array([0.97, 0.71, 2.39, 0.97, 2.3, 2.39, 1.87, 2.40, 0.87, 2.15, 1.71, 1.54, 2.15, 2.17, 1.54, 2.2, 1.87, 1.0],
+    model_output = np.array([0.97, 0.71, 2.39, 0.97, 2.30, 2.39, 
+                             1.87, 2.40, 0.87, 2.15, 1.71, 1.54, 
+                             2.15, 2.17, 1.54, 2.20, 1.87, 1.0],
                        dtype=np.float)
 
     problem = {
@@ -55,16 +60,19 @@ def test_analysis_of_morris_results():
                  num_resamples=1000,
                  conf_level=0.95,
                  print_to_console=False)
-    ee = np.array([[2.52, 2.01, 2.30, -0.66, -0.93, -1.30],
-                   [-0.39, 0.13, 0.80, 0.25, -0.02, 0.51]])
-    desired_mu = np.average(ee, 1)
-    assert_allclose(Si['mu'], desired_mu, rtol=1e-1)
-    desired_mu_star = np.average(np.abs(ee), 1)
-    assert_allclose(Si['mu_star'], desired_mu_star, rtol=1e-2)
-    desired_sigma = np.std(ee, 1)
-    assert_allclose(Si['sigma'], desired_sigma, rtol=1e-2)
+
+    desired_mu = np.array([0.66, 0.21])
+    assert_allclose(Si['mu'], desired_mu, rtol=1e-1, 
+                    err_msg="The values for mu are incorrect")
+    desired_mu_star = np.array([1.62, 0.35])
+    assert_allclose(Si['mu_star'], desired_mu_star, rtol=1e-2, 
+                    err_msg="The values for mu star are incorrect")
+    desired_sigma = np.array([1.79, 0.41])
+    assert_allclose(Si['sigma'], desired_sigma, rtol=1e-2, 
+                    err_msg="The values for sigma are incorrect")
     desired_names = ['Test 1', 'Test 2']
-    assert_equal(Si['names'], desired_names)
+    assert_equal(Si['names'], desired_names, 
+                 err_msg="The values for names are incorrect")
 
 
 @raises(ValueError)
@@ -127,6 +135,30 @@ def test_compute_elementary_effects():
                         [-2.51], [5.00], [9.34], [0.54], [5.43], [2.15], [13.05]],
                        dtype=np.float)
     assert_allclose(actual, desired, atol=1e-1)
+
+
+
+def test_compute_grouped_elementary_effects():
+    
+    model_inputs = np.array([[.39, -.39, -1.64, 0.39, -0.39, -0.39, 0.39, 0.39, -1.64, -0.39, 0.39, -1.64, 1.64, 1.64, 1.64],
+                             [-1.64, 1.64, 0.39, -1.64, 1.64, 1.64, -1.64, -1.64, -1.64, 1.64, 0.39, -1.64, 1.64, 1.64, 1.64],
+                             [-1.64, 1.64, 0.39, -1.64, 1.64, 1.64, -1.64, -1.64, 0.39, 1.64, -1.64, 0.39, -.39, -.39, -.39]
+                            ])
+    
+    model_results = np.array([13.85, -10.11, 1.12])
+    
+    problem = {'names':['1','2','3','4','5','6','7','8','9','10','11','12','13','14','15'],
+               'bounds':[[]],
+               'groups':(np.matrix('0,0,0,0,0,0,0,0,1,0,1,1,1,1,1;1,1,1,1,1,1,1,1,0,1,0,0,0,0,0'),
+                         ['gp1', 'gp2']),
+               'num_vars': 15
+               }
+    ee = compute_elementary_effects(model_inputs, model_results, 3, 2./3)
+    mu_star = np.average(np.abs(ee), axis=1)
+    actual = compute_grouped_metric(mu_star, problem['groups'][0].T)
+    desired = np.array([16.86, 35.95])
+    assert_allclose(actual, desired, atol=1e-1)
+
 
 
 def test_compute_elementary_effects_small():
@@ -216,6 +248,31 @@ def test_compute_grouped_mu_star():
                    [-2.00, 0.13, -0.80, 0.25, -0.02, 0.51],
                    [2.00, -0.13, 0.80, -0.25, 0.02, -0.51]])
     mu_star = np.average(np.abs(ee), 1)
-    actual = compute_grouped_mu_star(mu_star, group_matrix)
+    actual = compute_grouped_metric(mu_star, group_matrix)
     desired = np.array([1.62, 0.62], dtype=np.float)
     assert_allclose(actual, desired, rtol=1e-1)
+    
+    
+def test_sigma_returned_for_groups_with_only_one_param():
+    '''
+    Tests that a value for sigma is returned when the group contains 1 param
+    
+    Morris groups do not allow a value for sigma to be computed because it
+    requires the use of mu (as opposed to mu_star).
+    
+    However, if the group consists of just one parameter, then the sampling will
+    be identical to the situation in which no groups are used, but only for that
+    parameter.
+    
+    An NA should be returned for all other groups (as opposed to 0, which could
+    confuse plotting.morris)
+    '''
+    group_matrix = np.matrix('1,0;0,1;0,1', dtype=np.int)
+    ee = np.array([[2.52, 2.01, 2.30, -0.66, -0.93, -1.30],
+                   [-2.00, 0.13, -0.80, 0.25, -0.02, 0.51],
+                   [2.00, -0.13, 0.80, -0.25, 0.02, -0.51]])
+    sigma = np.std(ee, axis=1, ddof=1)
+    actual = compute_grouped_sigma(sigma, group_matrix)
+    desired = np.array([1.79352911, np.NAN], dtype=np.float)
+    assert_allclose(actual, desired, rtol=1e-1)
+    

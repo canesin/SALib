@@ -13,11 +13,6 @@ versioneer.parentdir_prefix = 'SALib-' # dirname like 'myproject-1.2.0'
 
 class NoseTestCommand(TestCommand):
 
-    def finalize_options(self):
-        TestCommand.finalize_options(self)
-        self.test_args = []
-        self.test_suite = True
-
     def run_tests(self):
         # Run nose ensuring that argv simulates running nosetests directly
         import nose
@@ -32,13 +27,14 @@ def setup_package():
     setup(
         name='SALib',
         packages=find_packages(exclude=["*tests*"]),
-        author="Jon Herman",
+        author="Jon Herman and Will Usher",
         author_email="jdherman8@gmail.com",
         license=open('LICENSE.md').read(),
         tests_require=['nose'],
         install_requires=[
-            "numpy>1.7",
+            "numpy>=1.9.0",
             "scipy",
+            "matplotlib>=1.4.3",
         ],
           
         extras_require = {
@@ -48,7 +44,7 @@ def setup_package():
         # Two arguments required by Versioneer
         version = versioneer.get_version(),
         cmdclass=cmdclass,
-        url="https://github.com/jdherman/SALib",
+        url="https://github.com/SALib/SALib",
         long_description=open('README.md').read(),
         description=(
             'Tools for sensitivity analysis. Contains Sobol, Morris, and FAST methods.'),

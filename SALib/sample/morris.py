@@ -17,35 +17,57 @@ except ImportError:
 else:
     _has_gurobi = True
 
-'''
-Three variants of Morris' sampling for
-elementary effects:
-        - vanilla Morris
-        - optimised trajectories (Campolongo's enhancements from 2007)
-        - groups with optimised trajectories (again Campolongo 2007)
-
-At present, optimised trajectories is implemented using a brute-force
-approach, which can be very slow, especially if you require more than four
-trajectories.  Note that the number of factors makes little difference,
-but the ratio between number of optimal trajectories and the sample size
-results in an exponentially increasing number of scores that must be
-computed to find the optimal combination of trajectories.
-
-I suggest going no higher than 4 from a pool of 100 samples.
-
-Suggested enhancements:
-    - a parallel brute force method (incomplete)
-    - a combinatorial optimisation approach (completed, but dependencies are
-      not open-source)
-'''
-
-
-def sample(problem, N, num_levels, grid_jump, optimal_trajectories=None):
-
+#Suggested enhancements:
+#    - a parallel brute force method (incomplete)
+#    - a combinatorial optimisation approach (completed, but dependencies are
+#      not open-source)
+def sample(problem, N, num_levels, grid_jump, optimal_trajectories=None, local_optimization=False):
+    """Generates model inputs using for Method of Morris.
+    
+    Returns a NumPy matrix containing the model inputs required for Method of
+    Morris.  The resulting matrix has N rows and D columns, where D is the
+    number of parameters.  These model inputs are intended to be used with
+    :func:`SALib.analyze.morris.analyze`.
+    
+    Three variants of Morris' sampling for elementary effects is supported:
+    
+    - Vanilla Morris
+    - Optimised trajectories when optimal_trajectories is set (using 
+      Campolongo's enhancements from 2007 and optionally Ruano's enhancement from 2012)
+    - Groups with optimised trajectories when optimal_trajectores is set and 
+      the problem definition specifies groups
+    
+    At present, optimised trajectories is implemented using a brute-force
+    approach, which can be very slow, especially if you require more than four
+    trajectories.  Note that the number of factors makes little difference,
+    but the ratio between number of optimal trajectories and the sample size
+    results in an exponentially increasing number of scores that must be
+    computed to find the optimal combination of trajectories.  We suggest going
+    no higher than 4 from a pool of 100 samples.
+    
+    Update: With local_optimization = True, it is possible to go higher than the previously suggested 4 from 100.
+    
+    Parameters
+    ----------
+    problem : dict
+        The problem definition
+    N : int
+        The number of samples to generate
+    num_levels : int
+        The number of grid levels
+    grid_jump : int
+        The grid jump size
+    optimal_trajectories : int
+        The number of optimal trajectories to sample (between 2 and N)
+    local_optimization : bool
+        Flag whether to use local optimization according to Ruano et al. (2012) 
+        Speeds up the process tremendously for bigger N and num_levels.
+        Stating this variable to be true causes the function to ignore gurobi.
+    """
     if grid_jump >= num_levels:
         raise ValueError("grid_jump must be less than num_levels")
 
-    if problem.get('groups', None) is None:
+    if problem.get('groups') is None:
         sample = sample_oat(problem, N, num_levels, grid_jump)
     else:
         sample = sample_groups(problem, N, num_levels, grid_jump)
@@ -60,15 +82,14 @@ def sample(problem, N, num_levels, grid_jump, optimal_trajectories=None):
         if optimal_trajectories >= N:
             raise ValueError("The number of optimal trajectories should be less than the number of samples.")
         
-        if _has_gurobi == False:
-
-            if optimal_trajectories > 10:
-                raise ValueError("Running optimal trajectories greater than values of 10 will take a long time.")
+        if _has_gurobi == False and local_optimization == False and optimal_trajectories > 10:
+            raise ValueError("Running optimal trajectories greater than values of 10 will take a long time.")
                 
         sample = compute_optimised_trajectories(problem, 
                                                 sample, 
                                                 N, 
-                                                optimal_trajectories)
+                                                optimal_trajectories,
+                                                local_optimization)
         
     scale_samples(sample, problem['bounds'])
     return sample
@@ -134,7 +155,7 @@ def sample_groups(problem, N, num_levels, grid_jump):
     return sample.reshape((N * (g + 1), k))
 
 
-def compute_optimised_trajectories(problem, input_sample, N, k_choices):
+def compute_optimised_trajectories(problem, input_sample, N, k_choices, local_optimization = False):
     '''
     Calls the procedure to compute the optimum k_choices of trajectories
     from the input_sample.
@@ -147,7 +168,7 @@ def compute_optimised_trajectories(problem, input_sample, N, k_choices):
     if np.any((input_sample < 0) | (input_sample > 1)):
         raise ValueError("Input sample must be scaled between 0 and 1")
     
-    if _has_gurobi:
+    if _has_gurobi == True and local_optimization == False:
         maximum_combo = return_max_combo(input_sample,
                                          N,
                                          num_params,
@@ -159,10 +180,11 @@ def compute_optimised_trajectories(problem, input_sample, N, k_choices):
                                                  N,
                                                  num_params,
                                                  k_choices,
-                                                 groups)
+                                                 groups,
+                                                 local_optimization)
 
     num_groups = None
-    if groups != None:
+    if groups is not None:
         num_groups = groups[0].shape[1]
 
     output = compile_output(input_sample,
@@ -177,12 +199,17 @@ def compute_optimised_trajectories(problem, input_sample, N, k_choices):
 if __name__ == "__main__":
 
     parser = common_args.create()
+    
+    parser.add_argument(
+        '-n', '--samples', type=int, required=True, help='Number of Samples')
     parser.add_argument('-l', '--levels', type=int, required=False,
                         default=4, help='Number of grid levels (Morris only)')
     parser.add_argument('--grid-jump', type=int, required=False,
                         default=2, help='Grid jump size (Morris only)')
     parser.add_argument('-k', '--k-optimal', type=int, required=False,
                         default=None, help='Number of optimal trajectories (Morris only)')
+    parser.add_argument('-o', '--local', type=bool, required=True, 
+                        default=False, help='Use the local optimisation method (Morris with optimization only)')
     args = parser.parse_args()
 
     np.random.seed(args.seed)
@@ -190,7 +217,8 @@ if __name__ == "__main__":
 
     problem = read_param_file(args.paramfile)
     param_values = sample(problem, args.samples, args.levels, \
-                    args.grid_jump, args.k_optimal)
+                    args.grid_jump, args.k_optimal, args.local)
 
     np.savetxt(args.output, param_values, delimiter=args.delimiter,
                fmt='%.' + str(args.precision) + 'e')
+
